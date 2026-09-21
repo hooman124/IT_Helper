@@ -3,7 +3,6 @@
 // Makes sure the app boots and shows the home screen without throwing,
 // and that the bottom navigation is present.
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:it_helper/main.dart';
