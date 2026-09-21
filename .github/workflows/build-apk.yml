@@ -1,0 +1,100 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      # The source repo does not include the Android platform folder on
+      # purpose. Flutter generates it here on the runner, merging into the
+      # existing pubspec.yaml / lib without touching them.
+      - name: Generate Android project
+        run: flutter create --platforms=android --org com.ithelper .
+
+      # If repository secrets for a release keystore are configured, decode
+      # the keystore and write android/key.properties + wire up signing in
+      # android/app/build.gradle(.kts). If the secrets are not set, the build
+      # falls back to Flutter's default debug-signed release build, so the
+      # pipeline always succeeds either way.
+      - name: Configure release signing (optional)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Release keystore secrets found - configuring signed release build."
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release-keystore.jks
+
+            cat > android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=release-keystore.jks
+          EOF
+
+            GRADLE_FILE="android/app/build.gradle.kts"
+            if [ ! -f "$GRADLE_FILE" ]; then
+              GRADLE_FILE="android/app/build.gradle"
+            fi
+
+            python3 .github/scripts/patch_signing.py "$GRADLE_FILE"
+          else
+            echo "No keystore secrets found - building with Flutter's default debug-signed release build."
+            echo "This is fine for testing, but for a real Cafe Bazaar release you should add"
+            echo "the KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD secrets."
+          fi
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Build release AAB (for Cafe Bazaar)
+        run: flutter build appbundle --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: it-helper-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: it-helper-release-aab
+          path: build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
